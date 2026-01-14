@@ -7,29 +7,39 @@ const swaggerSpec = require('../swagger');
 
 const { getConfig } = require('./config');
 const { AppError } = require('./errors');
-const { ensureSchema } = require('./db/migrate');
 
 const config = getConfig();
 
 // Initialize express app
 const app = express();
 
-// Ensure DB schema exists (idempotent). Errors will surface early during startup.
-ensureSchema().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error('Schema initialization failed:', err);
-});
+/**
+ * Build a safe CORS origin resolver.
+ * - When credentials=true, origin cannot be '*'
+ * - We allow only configured origins; otherwise we reject by returning false.
+ */
+function corsOriginDelegate(origin, callback) {
+  // Non-browser or same-origin requests may not send Origin header; allow them.
+  if (!origin) return callback(null, true);
+
+  if (config.allowedOrigins.includes(origin)) {
+    return callback(null, true);
+  }
+
+  return callback(null, false);
+}
 
 app.use(
   cors({
-    origin: config.corsOrigin,
+    origin: corsOriginDelegate,
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: config.allowedMethods,
+    allowedHeaders: config.allowedHeaders,
+    maxAge: config.corsMaxAge,
   })
 );
 
-app.set('trust proxy', true);
+app.set('trust proxy', config.trustProxy);
 
 // Swagger UI
 app.use('/docs', swaggerUi.serve, (req, res, next) => {
