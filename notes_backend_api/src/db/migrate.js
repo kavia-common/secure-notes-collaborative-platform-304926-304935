@@ -52,8 +52,21 @@ async function ensureSchema() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS note_shares (
+        note_id uuid NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+        shared_with_user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission text NOT NULL CHECK (permission IN ('read', 'edit')),
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE(note_id, shared_with_user_id)
+      );
+    `);
+
     await client.query('CREATE INDEX IF NOT EXISTS idx_collections_owner_user_id ON collections(owner_user_id);');
     await client.query('CREATE INDEX IF NOT EXISTS idx_notes_collection_id ON notes(collection_id);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_note_shares_shared_with_note ON note_shares(shared_with_user_id, note_id);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_note_shares_note_id ON note_shares(note_id);');
 
     await client.query('COMMIT');
   } catch (err) {

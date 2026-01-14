@@ -48,39 +48,92 @@ class NotesRepository {
 
   /**
    * PUBLIC_INTERFACE
-   * Gets a note by id, constrained by owner via join through collections.
-   * @param {string} ownerUserId
+   * Returns the access level a user has to a note.
+   *
+   * - owner: user owns the collection containing the note
+   * - edit/read: user has an explicit share row in note_shares
+   * - null: no access (or note does not exist)
+   *
+   * @param {string} userId
+   * @param {string} noteId
+   * @returns {Promise<{ isOwner: boolean, permission: 'owner'|'edit'|'read'|null }>}
+   */
+  async checkNoteAccess(userId, noteId) {
+    const pool = getPool();
+
+    // Note existence + owner check
+    const { rows: ownerRows } = await pool.query(
+      `SELECT 1
+       FROM notes n
+       JOIN collections c ON c.id = n.collection_id
+       WHERE n.id = $1 AND c.owner_user_id = $2
+       LIMIT 1`,
+      [noteId, userId]
+    );
+
+    if (ownerRows.length > 0) {
+      return { isOwner: true, permission: 'owner' };
+    }
+
+    // Share check (read/edit)
+    const { rows: shareRows } = await pool.query(
+      `SELECT permission
+       FROM note_shares
+       WHERE note_id = $1 AND shared_with_user_id = $2
+       LIMIT 1`,
+      [noteId, userId]
+    );
+
+    if (shareRows.length > 0) {
+      const p = shareRows[0].permission === 'edit' ? 'edit' : 'read';
+      return { isOwner: false, permission: p };
+    }
+
+    return { isOwner: false, permission: null };
+  }
+
+  /**
+   * PUBLIC_INTERFACE
+   * Gets a note by id if user has at least read access (owner/read/edit).
+   * @param {string} userId
    * @param {string} noteId
    */
-  async getByIdForOwner(ownerUserId, noteId) {
+  async getByIdForAccessibleUser(userId, noteId) {
     const pool = getPool();
     const { rows } = await pool.query(
       `SELECT n.id, n.collection_id, n.title, n.content, n.created_at, n.updated_at
        FROM notes n
        JOIN collections c ON c.id = n.collection_id
-       WHERE n.id = $1 AND c.owner_user_id = $2
+       LEFT JOIN note_shares ns
+         ON ns.note_id = n.id AND ns.shared_with_user_id = $2
+       WHERE n.id = $1
+         AND (c.owner_user_id = $2 OR ns.permission IN ('read', 'edit'))
        LIMIT 1`,
-      [noteId, ownerUserId]
+      [noteId, userId]
     );
     return rows[0] || null;
   }
 
   /**
    * PUBLIC_INTERFACE
-   * Updates a note by id, constrained by owner via join through collections.
-   * @param {string} ownerUserId
+   * Updates a note by id if user has edit access (owner/edit).
+   * @param {string} userId
    * @param {string} noteId
    * @param {{ title: string, content: string }} input
    */
-  async updateForOwner(ownerUserId, noteId, { title, content }) {
+  async updateForEditableUser(userId, noteId, { title, content }) {
     const pool = getPool();
     const { rows } = await pool.query(
       `UPDATE notes n
        SET title = $1, content = $2, updated_at = now()
        FROM collections c
-       WHERE n.id = $3 AND c.id = n.collection_id AND c.owner_user_id = $4
+       LEFT JOIN note_shares ns
+         ON ns.note_id = n.id AND ns.shared_with_user_id = $4
+       WHERE n.id = $3
+         AND c.id = n.collection_id
+         AND (c.owner_user_id = $4 OR ns.permission = 'edit')
        RETURNING n.id, n.collection_id, n.title, n.content, n.created_at, n.updated_at`,
-      [title, content, noteId, ownerUserId]
+      [title, content, noteId, userId]
     );
     return rows[0] || null;
   }
